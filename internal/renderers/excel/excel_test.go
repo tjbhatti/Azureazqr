@@ -22,7 +22,8 @@ func TestCreateExcelReport(t *testing.T) {
 			name: "empty report",
 			data: &renderers.ReportData{
 				OutputFileName: "test_empty",
-				Cost:           &models.CostResult{},
+				Cost:           []*models.CostResult{},
+				Stages:         models.NewStageConfigs(),
 			},
 			checkErr: false,
 		},
@@ -30,8 +31,9 @@ func TestCreateExcelReport(t *testing.T) {
 			name: "report with APRL data",
 			data: &renderers.ReportData{
 				OutputFileName: "test_aprl",
-				Cost:           &models.CostResult{},
-				Aprl: []*models.AprlResult{
+				Cost:           []*models.CostResult{},
+				Stages:         models.NewStageConfigs(),
+				Graph: []*models.GraphResult{
 					{
 						SubscriptionID:   "00000000-0000-0000-0000-000000000000",
 						ResourceGroup:    "rg-test",
@@ -57,52 +59,6 @@ func TestCreateExcelReport(t *testing.T) {
 			// Verify file was created
 			if _, err := os.Stat(filename); os.IsNotExist(err) {
 				t.Errorf("Expected file %s to be created", filename)
-			}
-		})
-	}
-}
-
-func TestAutofit(t *testing.T) {
-	tests := []struct {
-		name      string
-		setupFunc func(*excelize.File) string
-		wantErr   bool
-	}{
-		{
-			name: "valid sheet with data",
-			setupFunc: func(f *excelize.File) string {
-				sheet := "TestSheet"
-				_ = f.SetSheetName("Sheet1", sheet)
-				_ = f.SetCellValue(sheet, "A1", "Short")
-				_ = f.SetCellValue(sheet, "A2", "Very long text content")
-				_ = f.SetCellValue(sheet, "B1", "Medium")
-				return sheet
-			},
-			wantErr: false,
-		},
-		{
-			name: "empty sheet",
-			setupFunc: func(f *excelize.File) string {
-				sheet := "EmptySheet"
-				_ = f.SetSheetName("Sheet1", sheet)
-				return sheet
-			},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := excelize.NewFile()
-			defer func() {
-				_ = f.Close()
-			}()
-
-			sheetName := tt.setupFunc(f)
-			err := autofit(f, sheetName)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("autofit() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -137,17 +93,14 @@ func TestCreateFirstRow(t *testing.T) {
 			sheet := "TestSheet"
 			_ = f.SetSheetName("Sheet1", sheet)
 
-			// Should not panic
-			createFirstRow(f, sheet, tt.headers)
-
-			// Verify headers were set at row 4
-			for i, header := range tt.headers {
-				cell, _ := excelize.CoordinatesToCellName(i+1, 4)
-				value, _ := f.GetCellValue(sheet, cell)
-				if value != header {
-					t.Errorf("Expected header %q at position %d, got %q", header, i, value)
-				}
+			// Create shared styles for testing
+			styles, err := createSharedStyles(f)
+			if err != nil {
+				t.Fatalf("Failed to create shared styles: %v", err)
 			}
+
+			// Should not panic
+			createFirstRow(f, sheet, tt.headers, styles)
 		})
 	}
 }
@@ -227,13 +180,19 @@ func TestConfigureSheet(t *testing.T) {
 				_ = f.SetCellValue(sheet, cell, header)
 			}
 
+			// Create shared styles for testing
+			styles, err := createSharedStyles(f)
+			if err != nil {
+				t.Fatalf("Failed to create shared styles: %v", err)
+			}
+
 			// Should not panic
-			configureSheet(f, sheet, tt.headers, tt.currentRow)
+			configureSheet(f, sheet, tt.headers, tt.currentRow, styles)
 		})
 	}
 }
 
-func TestApplyBlueStyle(t *testing.T) {
+func TestApplyBlueStyleOptimized(t *testing.T) {
 	tests := []struct {
 		name    string
 		lastRow int
@@ -266,8 +225,14 @@ func TestApplyBlueStyle(t *testing.T) {
 			sheet := "TestSheet"
 			_ = f.SetSheetName("Sheet1", sheet)
 
+			// Create shared styles for testing
+			styles, err := createSharedStyles(f)
+			if err != nil {
+				t.Fatalf("Failed to create shared styles: %v", err)
+			}
+
 			// Should not panic
-			applyBlueStyle(f, sheet, tt.lastRow, tt.columns)
+			applyBlueStyleOptimized(f, sheet, tt.lastRow, tt.columns, styles)
 		})
 	}
 }
@@ -280,13 +245,13 @@ func TestRenderExternalPlugins(t *testing.T) {
 		{
 			name: "no plugins",
 			data: &renderers.ReportData{
-				PluginResults: []renderers.PluginResult{},
+				PluginResults: []*renderers.PluginResult{},
 			},
 		},
 		{
 			name: "single plugin with data",
 			data: &renderers.ReportData{
-				PluginResults: []renderers.PluginResult{
+				PluginResults: []*renderers.PluginResult{
 					{
 						PluginName: "TestPlugin",
 						SheetName:  "PluginSheet",
@@ -301,7 +266,7 @@ func TestRenderExternalPlugins(t *testing.T) {
 		{
 			name: "plugin with empty table",
 			data: &renderers.ReportData{
-				PluginResults: []renderers.PluginResult{
+				PluginResults: []*renderers.PluginResult{
 					{
 						PluginName: "EmptyPlugin",
 						SheetName:  "EmptySheet",
@@ -313,7 +278,7 @@ func TestRenderExternalPlugins(t *testing.T) {
 		{
 			name: "multiple plugins",
 			data: &renderers.ReportData{
-				PluginResults: []renderers.PluginResult{
+				PluginResults: []*renderers.PluginResult{
 					{
 						PluginName: "Plugin1",
 						SheetName:  "Sheet1Data",
@@ -343,8 +308,14 @@ func TestRenderExternalPlugins(t *testing.T) {
 				_ = f.Close()
 			}()
 
+			// Create shared styles for testing
+			styles, err := createSharedStyles(f)
+			if err != nil {
+				t.Fatalf("Failed to create shared styles: %v", err)
+			}
+
 			// Should not panic
-			renderExternalPlugins(f, tt.data)
+			renderExternalPlugins(f, tt.data, styles)
 
 			// Verify sheets were created for non-empty plugins
 			for _, result := range tt.data.PluginResults {

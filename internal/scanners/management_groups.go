@@ -12,9 +12,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type ManagementGroupsScanner struct{}
+type ManagementGroupDiscovery struct{}
 
-func (sc ManagementGroupsScanner) ListSubscriptions(ctx context.Context, cred azcore.TokenCredential, groups []string, filters *models.Filters, options *arm.ClientOptions) map[string]string {
+func (sc ManagementGroupDiscovery) ListSubscriptions(ctx context.Context, cred azcore.TokenCredential, groups []string, filters *models.Filters, options *arm.ClientOptions) map[string]string {
 	client, err := armmanagementgroups.NewClientFactory(cred, options)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create management groups client")
@@ -24,7 +24,7 @@ func (sc ManagementGroupsScanner) ListSubscriptions(ctx context.Context, cred az
 	for _, group := range groups {
 		resultPager := client.NewManagementGroupSubscriptionsClient().NewGetSubscriptionsUnderManagementGroupPager(group, nil)
 
-		subscriptions := make([]*armmanagementgroups.SubscriptionUnderManagementGroup, 0)
+		subscriptions := make([]*armmanagementgroups.SubscriptionUnderManagementGroup, 0, 10)
 		for resultPager.More() {
 			pageResp, err := resultPager.NextPage(ctx)
 			if err != nil {

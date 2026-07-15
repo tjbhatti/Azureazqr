@@ -7,11 +7,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
-
+	"github.com/Azure/azqr/internal/models"
 	"github.com/Azure/azqr/internal/plugins"
+	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -24,9 +25,36 @@ var rootCmd = &cobra.Command{
 	Long:    `Azure Quick Review (azqr) goal is to produce a high level assessment of an Azure Subscription or Resource Group`,
 	Args:    cobra.NoArgs,
 	Version: version,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		// Initialize log level based on --debug flag
+		// This runs before any command executes, making debug logging available globally
+		debug, _ := cmd.Flags().GetBool("debug")
+		InitializeLogLevel(debug)
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Usage()
 	},
+}
+
+func init() {
+	// Add global --debug flag to root command (available to all subcommands)
+	rootCmd.PersistentFlags().BoolP("debug", "", false, "Enable debug logging")
+}
+
+// InitializeLogLevel sets the global log level based on debug flag
+// This is exported so it can be called from the root command to set logging early
+func InitializeLogLevel(debug bool) {
+	if debug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		azlog.SetListener(func(event azlog.Event, msg string) {
+			log.Debug().
+				Str("event", string(event)).
+				Msg(msg)
+		})
+		log.Debug().Msg("Debug logging enabled")
+		return
+	}
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 }
 
 func Execute() {
@@ -37,6 +65,25 @@ func Execute() {
 	// Load all YAML plugins after logger is configured
 	if err := plugins.LoadAll(); err != nil {
 		log.Warn().Err(err).Msg("Failed to load some plugins")
+	}
+
+	// Attach plugin commands as top-level commands and set their Run functions
+	registry := plugins.GetRegistry()
+	for _, plugin := range registry.List() {
+		if plugin.Command != nil {
+			pluginName := plugin.Metadata.Name
+			// Capture pluginName in closure properly
+			pName := pluginName
+			// Set the Run function to enable only this plugin
+			plugin.Command.Run = func(cmd *cobra.Command, args []string) {
+				// Enable only this specific plugin
+				// Note: We can't use Set() for StringArray flags, so we pass it directly to scan
+				scannerKeys, _ := models.GetScanners()
+				// Create a custom scan with this plugin enabled
+				scanWithPlugin(cmd, scannerKeys, pName)
+			}
+			rootCmd.AddCommand(plugin.Command)
+		}
 	}
 
 	cobra.CheckErr(rootCmd.Execute())

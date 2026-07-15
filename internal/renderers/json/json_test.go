@@ -63,7 +63,7 @@ func TestConvertToJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := convertToJSON(tt.input)
+			got := ConvertToJSON(tt.input)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("convertToJSON() = %v, want %v", got, tt.want)
 			}
@@ -74,24 +74,24 @@ func TestConvertToJSON(t *testing.T) {
 func TestCreateJsonOutput(t *testing.T) {
 	// Create test data with proper initialization
 	data := &renderers.ReportData{
-		Aprl:                    []*models.AprlResult{},
-		Azqr:                    []*models.AzqrServiceResult{},
+		Graph:                   []*models.GraphResult{},
 		Defender:                []*models.DefenderResult{},
 		DefenderRecommendations: []*models.DefenderRecommendation{},
 		Advisor:                 []*models.AdvisorResult{},
 		AzurePolicy:             []*models.AzurePolicyResult{},
 		ArcSQL:                  []*models.ArcSQLResult{},
-		Cost:                    &models.CostResult{},
+		Cost:                    []*models.CostResult{},
 		Resources:               []*models.Resource{},
 		ExludedResources:        []*models.Resource{},
-		ResourceTypeCount:       []models.ResourceTypeCount{},
+		ResourceTypeCount:       []*models.ResourceTypeCount{},
+		Stages:                  models.NewStageConfigs(),
 	}
 
 	// Test that it returns valid JSON
 	output := CreateJsonOutput(data)
 
 	// Verify it's valid JSON
-	var result []map[string]string
+	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Errorf("CreateJsonOutput() returned invalid JSON: %v", err)
 	}
@@ -102,19 +102,28 @@ func TestCreateJsonReport(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create test data with proper initialization
+	stages := models.NewStageConfigs()
+	_ = stages.EnableStage(models.StageNameGraph)
+	_ = stages.EnableStage(models.StageNameDefender)
+	_ = stages.EnableStage(models.StageNameDefenderRecommendations)
+	_ = stages.EnableStage(models.StageNamePolicy)
+	_ = stages.EnableStage(models.StageNameArc)
+	_ = stages.EnableStage(models.StageNameAdvisor)
+	_ = stages.EnableStage(models.StageNameCost)
+
 	data := &renderers.ReportData{
 		OutputFileName:          filepath.Join(tmpDir, "test_report"),
-		Aprl:                    []*models.AprlResult{},
-		Azqr:                    []*models.AzqrServiceResult{},
+		Graph:                   []*models.GraphResult{},
 		Defender:                []*models.DefenderResult{},
 		DefenderRecommendations: []*models.DefenderRecommendation{},
 		Advisor:                 []*models.AdvisorResult{},
 		AzurePolicy:             []*models.AzurePolicyResult{},
 		ArcSQL:                  []*models.ArcSQLResult{},
-		Cost:                    &models.CostResult{},
+		Cost:                    []*models.CostResult{},
 		Resources:               []*models.Resource{},
 		ExludedResources:        []*models.Resource{},
-		ResourceTypeCount:       []models.ResourceTypeCount{},
+		ResourceTypeCount:       []*models.ResourceTypeCount{},
+		Stages:                  stages,
 	}
 
 	// Create the report
@@ -128,7 +137,7 @@ func TestCreateJsonReport(t *testing.T) {
 	}
 
 	// Verify file contains valid JSON
-	fileData, err := os.ReadFile(filename)
+	fileData, err := os.ReadFile(filename) //nolint:gosec // filename is a test-generated path
 	if err != nil {
 		t.Fatalf("Failed to read created file: %v", err)
 	}
@@ -165,20 +174,29 @@ func TestCreateJsonReportWithPlugins(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create test data with plugin results and proper initialization
+	stages := models.NewStageConfigs()
+	_ = stages.DisableStage(models.StageNameGraph)
+	_ = stages.DisableStage(models.StageNameDefender)
+	_ = stages.DisableStage(models.StageNameDefenderRecommendations)
+	_ = stages.DisableStage(models.StageNamePolicy)
+	_ = stages.DisableStage(models.StageNameArc)
+	_ = stages.DisableStage(models.StageNameAdvisor)
+	_ = stages.DisableStage(models.StageNameCost)
+
 	data := &renderers.ReportData{
 		OutputFileName:          filepath.Join(tmpDir, "test_report_plugins"),
-		Aprl:                    []*models.AprlResult{},
-		Azqr:                    []*models.AzqrServiceResult{},
+		Graph:                   []*models.GraphResult{},
 		Defender:                []*models.DefenderResult{},
 		DefenderRecommendations: []*models.DefenderRecommendation{},
 		Advisor:                 []*models.AdvisorResult{},
 		AzurePolicy:             []*models.AzurePolicyResult{},
 		ArcSQL:                  []*models.ArcSQLResult{},
-		Cost:                    &models.CostResult{},
+		Cost:                    []*models.CostResult{},
 		Resources:               []*models.Resource{},
 		ExludedResources:        []*models.Resource{},
-		ResourceTypeCount:       []models.ResourceTypeCount{},
-		PluginResults: []renderers.PluginResult{
+		ResourceTypeCount:       []*models.ResourceTypeCount{},
+		Stages:                  stages,
+		PluginResults: []*renderers.PluginResult{
 			{
 				PluginName:  "test-plugin",
 				Description: "Test Plugin",
@@ -196,7 +214,7 @@ func TestCreateJsonReportWithPlugins(t *testing.T) {
 
 	// Verify file was created
 	filename := filepath.Join(tmpDir, "test_report_plugins.json")
-	fileData, err := os.ReadFile(filename)
+	fileData, err := os.ReadFile(filename) //nolint:gosec // filename is a test-generated path
 	if err != nil {
 		t.Fatalf("Failed to read created file: %v", err)
 	}
@@ -209,5 +227,26 @@ func TestCreateJsonReportWithPlugins(t *testing.T) {
 	// Verify plugin data exists
 	if _, exists := result["externalPlugins"]; !exists {
 		t.Error("Expected 'externalPlugins' key not found in JSON output")
+	}
+
+	// Verify that disabled features are NOT in the output
+	disabledKeys := []string{
+		"recommendations",
+		"impacted",
+		"resourceType",
+		"inventory",
+		"advisor",
+		"azurePolicy",
+		"arcSQL",
+		"defender",
+		"defenderRecommendations",
+		"costs",
+		"outOfScope",
+	}
+
+	for _, key := range disabledKeys {
+		if _, exists := result[key]; exists {
+			t.Errorf("Key %s should not be present when feature is disabled", key)
+		}
 	}
 }

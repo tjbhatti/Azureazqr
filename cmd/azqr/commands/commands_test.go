@@ -49,6 +49,7 @@ func TestScanCommandExists(t *testing.T) {
 	scanCmd := findCommand(rootCmd, "scan")
 	if scanCmd == nil {
 		t.Fatal("scan command should exist")
+		return
 	}
 
 	if scanCmd.Use != "scan" {
@@ -64,6 +65,7 @@ func TestScanCommandHasRequiredFlags(t *testing.T) {
 	scanCmd := findCommand(rootCmd, "scan")
 	if scanCmd == nil {
 		t.Fatal("scan command should exist")
+		return
 	}
 
 	requiredFlags := []struct {
@@ -73,19 +75,14 @@ func TestScanCommandHasRequiredFlags(t *testing.T) {
 		{"management-group-id", "stringArray"},
 		{"subscription-id", "stringArray"},
 		{"resource-group", "stringArray"},
-		{"defender", "bool"},
-		{"advisor", "bool"},
-		{"costs", "bool"},
-		{"policy", "bool"},
-		{"arc", "bool"},
+		{"stages", "stringArray"},
+		{"plugin", "stringArray"},
 		{"xlsx", "bool"},
 		{"json", "bool"},
 		{"csv", "bool"},
 		{"output-name", "string"},
 		{"mask", "bool"},
 		{"filters", "string"},
-		{"azqr", "bool"},
-		{"debug", "bool"},
 	}
 
 	for _, rf := range requiredFlags {
@@ -112,17 +109,10 @@ func TestScanCommandFlagDefaults(t *testing.T) {
 		flagName      string
 		expectedValue string
 	}{
-		{"defender", "true"},
-		{"advisor", "true"},
-		{"costs", "true"},
-		{"policy", "false"},
-		{"arc", "true"},
 		{"xlsx", "true"},
 		{"json", "false"},
 		{"csv", "false"},
 		{"mask", "true"},
-		{"azqr", "true"},
-		{"debug", "false"},
 	}
 
 	for _, tt := range tests {
@@ -173,6 +163,7 @@ func TestCompareCommandExists(t *testing.T) {
 	compareCmd := findCommand(rootCmd, "compare")
 	if compareCmd == nil {
 		t.Fatal("compare command should exist")
+		return
 	}
 
 	if compareCmd.Use != "compare" {
@@ -188,6 +179,7 @@ func TestCompareCommandHasRequiredFlags(t *testing.T) {
 	compareCmd := findCommand(rootCmd, "compare")
 	if compareCmd == nil {
 		t.Fatal("compare command should exist")
+		return
 	}
 
 	requiredFlags := []string{"file1", "file2"}
@@ -213,6 +205,7 @@ func TestShowCommandExists(t *testing.T) {
 	showCmd := findCommand(rootCmd, "show")
 	if showCmd == nil {
 		t.Fatal("show command should exist")
+		return
 	}
 
 	if showCmd.Use != "show" {
@@ -240,6 +233,7 @@ func TestRulesCommandExists(t *testing.T) {
 	rulesCmd := findCommand(rootCmd, "rules")
 	if rulesCmd == nil {
 		t.Fatal("rules command should exist")
+		return
 	}
 
 	if rulesCmd.Use != "rules" {
@@ -257,6 +251,7 @@ func TestTypesCommandExists(t *testing.T) {
 	typesCmd := findCommand(rootCmd, "types")
 	if typesCmd == nil {
 		t.Fatal("types command should exist")
+		return
 	}
 
 	if typesCmd.Use != "types" {
@@ -316,7 +311,8 @@ func TestPortAvailable(t *testing.T) {
 
 func TestPortAvailableWithUsedPort(t *testing.T) {
 	// Start a listener on a port
-	listener, err := net.Listen("tcp", ":0")
+	// Using ":0" lets the OS pick an available port - this is safe for tests
+	listener, err := net.Listen("tcp", "127.0.0.1:0") //nolint:gosec // Using localhost for test safety
 	if err != nil {
 		t.Fatalf("Failed to start test listener: %v", err)
 	}
@@ -474,10 +470,6 @@ func TestScanCommandShortcutFlags(t *testing.T) {
 	}{
 		{"subscription-id", "s"},
 		{"resource-group", "g"},
-		{"defender", "d"},
-		{"advisor", "a"},
-		{"costs", "c"},
-		{"policy", "p"},
 		{"output-name", "o"},
 		{"mask", "m"},
 		{"filters", "e"},
@@ -507,6 +499,7 @@ func TestCompareCommandFormatDefault(t *testing.T) {
 	formatFlag := compareCmd.Flags().Lookup("format")
 	if formatFlag == nil {
 		t.Fatal("compare command should have 'format' flag")
+		return
 	}
 
 	if formatFlag.DefValue != "excel" {
@@ -523,6 +516,7 @@ func TestShowCommandPortDefault(t *testing.T) {
 	portFlag := showCmd.Flags().Lookup("port")
 	if portFlag == nil {
 		t.Fatal("show command should have 'port' flag")
+		return
 	}
 
 	if portFlag.DefValue != "8080" {
@@ -532,6 +526,7 @@ func TestShowCommandPortDefault(t *testing.T) {
 	openFlag := showCmd.Flags().Lookup("open")
 	if openFlag == nil {
 		t.Fatal("show command should have 'open' flag")
+		return
 	}
 
 	if openFlag.DefValue != "true" {

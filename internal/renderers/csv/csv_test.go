@@ -18,20 +18,29 @@ func TestCreateCsvReport(t *testing.T) {
 	// Create temporary directory for test output
 	tmpDir := t.TempDir()
 
-	// Create test data with proper initialization
+	// Create test data with proper initialization and feature flags enabled
+	stages := models.NewStageConfigs()
+	_ = stages.EnableStage(models.StageNameGraph)
+	_ = stages.EnableStage(models.StageNameDefender)
+	_ = stages.EnableStage(models.StageNameDefenderRecommendations)
+	_ = stages.EnableStage(models.StageNamePolicy)
+	_ = stages.EnableStage(models.StageNameArc)
+	_ = stages.EnableStage(models.StageNameAdvisor)
+	_ = stages.EnableStage(models.StageNameCost)
+
 	data := &renderers.ReportData{
 		OutputFileName:          filepath.Join(tmpDir, "test_report"),
-		Aprl:                    []*models.AprlResult{},
-		Azqr:                    []*models.AzqrServiceResult{},
+		Graph:                   []*models.GraphResult{},
 		Defender:                []*models.DefenderResult{},
 		DefenderRecommendations: []*models.DefenderRecommendation{},
 		Advisor:                 []*models.AdvisorResult{},
 		AzurePolicy:             []*models.AzurePolicyResult{},
 		ArcSQL:                  []*models.ArcSQLResult{},
-		Cost:                    &models.CostResult{},
+		Cost:                    []*models.CostResult{},
 		Resources:               []*models.Resource{},
 		ExludedResources:        []*models.Resource{},
-		ResourceTypeCount:       []models.ResourceTypeCount{},
+		ResourceTypeCount:       []*models.ResourceTypeCount{},
+		Stages:                  stages,
 	}
 
 	// Create the report
@@ -66,20 +75,29 @@ func TestCreateCsvReportWithPlugins(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create test data with plugin results and proper initialization
+	stages := models.NewStageConfigs()
+	_ = stages.DisableStage(models.StageNameGraph)
+	_ = stages.DisableStage(models.StageNameDefender)
+	_ = stages.DisableStage(models.StageNameDefenderRecommendations)
+	_ = stages.DisableStage(models.StageNamePolicy)
+	_ = stages.DisableStage(models.StageNameArc)
+	_ = stages.DisableStage(models.StageNameAdvisor)
+	_ = stages.DisableStage(models.StageNameCost)
+
 	data := &renderers.ReportData{
 		OutputFileName:          filepath.Join(tmpDir, "test_report_plugins"),
-		Aprl:                    []*models.AprlResult{},
-		Azqr:                    []*models.AzqrServiceResult{},
+		Graph:                   []*models.GraphResult{},
 		Defender:                []*models.DefenderResult{},
 		DefenderRecommendations: []*models.DefenderRecommendation{},
 		Advisor:                 []*models.AdvisorResult{},
 		AzurePolicy:             []*models.AzurePolicyResult{},
 		ArcSQL:                  []*models.ArcSQLResult{},
-		Cost:                    &models.CostResult{},
+		Cost:                    []*models.CostResult{},
 		Resources:               []*models.Resource{},
 		ExludedResources:        []*models.Resource{},
-		ResourceTypeCount:       []models.ResourceTypeCount{},
-		PluginResults: []renderers.PluginResult{
+		ResourceTypeCount:       []*models.ResourceTypeCount{},
+		Stages:                  stages,
+		PluginResults: []*renderers.PluginResult{
 			{
 				PluginName:  "test-plugin",
 				Description: "Test Plugin",
@@ -141,7 +159,7 @@ func TestWriteData(t *testing.T) {
 	}
 
 	// Read and verify the data
-	file, err := os.Open(expectedFile)
+	file, err := os.Open(expectedFile) //nolint:gosec // expectedFile is a test-generated path
 	if err != nil {
 		t.Fatalf("Failed to open created file: %v", err)
 	}
@@ -181,7 +199,7 @@ func TestWriteDataEmptyTable(t *testing.T) {
 	}
 
 	// Read and verify the data
-	file, err := os.Open(expectedFile)
+	file, err := os.Open(expectedFile) //nolint:gosec // expectedFile is a test-generated path
 	if err != nil {
 		t.Fatalf("Failed to open created file: %v", err)
 	}

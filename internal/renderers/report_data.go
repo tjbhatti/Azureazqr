@@ -14,25 +14,32 @@ type (
 	ReportData struct {
 		OutputFileName          string
 		Mask                    bool
-		Azqr                    []*models.AzqrServiceResult
-		Aprl                    []*models.AprlResult
-		Defender                []*models.DefenderResult
-		DefenderRecommendations []*models.DefenderRecommendation
-		Advisor                 []*models.AdvisorResult
-		AzurePolicy             []*models.AzurePolicyResult
-		ArcSQL                  []*models.ArcSQLResult
-		Cost                    *models.CostResult
-		Recommendations         map[string]map[string]models.AprlRecommendation
-		Resources               []*models.Resource
-		ExludedResources        []*models.Resource
-		ResourceTypeCount       []models.ResourceTypeCount
-		PluginResults           []PluginResult // Results from external plugins
-		// Feature flags to differentiate between disabled features and no data
-		PolicyEnabled   bool
-		ArcEnabled      bool
-		DefenderEnabled bool
-		AdvisorEnabled  bool
-		CostEnabled     bool
+		Graph                   []*models.GraphResult                             `json:"graph,omitempty"`
+		Defender                []*models.DefenderResult                          `json:"defender,omitempty"`
+		DefenderRecommendations []*models.DefenderRecommendation                  `json:"defenderRecommendations,omitempty"`
+		Advisor                 []*models.AdvisorResult                           `json:"advisor,omitempty"`
+		AzurePolicy             []*models.AzurePolicyResult                       `json:"azurePolicy,omitempty"`
+		ArcSQL                  []*models.ArcSQLResult                            `json:"arcSQL,omitempty"`
+		Cost                    []*models.CostResult                              `json:"cost,omitempty"`
+		Recommendations         map[string]map[string]*models.GraphRecommendation `json:"-"`
+		Resources               []*models.Resource                                `json:"resources,omitempty"`
+		ExludedResources        []*models.Resource                                `json:"-"`
+		ResourceTypeCount       []*models.ResourceTypeCount                       `json:"resourceTypeCount,omitempty"`
+		PluginResults           []*PluginResult                                   `json:"pluginResults,omitempty"`
+		Stages                  *models.StageConfigs                              `json:"-"`
+
+		// Table caches - populated on first call, reused thereafter
+		cachedImpactedTable                [][]string `json:"-"`
+		cachedCostTable                    [][]string `json:"-"`
+		cachedDefenderTable                [][]string `json:"-"`
+		cachedAdvisorTable                 [][]string `json:"-"`
+		cachedAzurePolicyTable             [][]string `json:"-"`
+		cachedArcSQLTable                  [][]string `json:"-"`
+		cachedRecommendationsTable         [][]string `json:"-"`
+		cachedResourceTypesTable           [][]string `json:"-"`
+		cachedDefenderRecommendationsTable [][]string `json:"-"`
+		cachedResourcesTable               [][]string `json:"-"`
+		cachedExcludedResourcesTable       [][]string `json:"-"`
 	}
 
 	// PluginResult represents data from an external plugin
@@ -49,33 +56,66 @@ type (
 )
 
 func (rd *ReportData) ResourcesTable() [][]string {
-	return rd.resourcesTable(rd.Resources)
+	if rd.cachedResourcesTable != nil {
+		return rd.cachedResourcesTable
+	}
+	rd.cachedResourcesTable = rd.resourcesTable(rd.Resources)
+	return rd.cachedResourcesTable
 }
 
 func (rd *ReportData) ExcludedResourcesTable() [][]string {
-	return rd.resourcesTable(rd.ExludedResources)
+	if rd.cachedExcludedResourcesTable != nil {
+		return rd.cachedExcludedResourcesTable
+	}
+	rd.cachedExcludedResourcesTable = rd.resourcesTable(rd.ExludedResources)
+	return rd.cachedExcludedResourcesTable
 }
 
 func (rd *ReportData) ImpactedTable() [][]string {
+	if rd.cachedImpactedTable != nil {
+		return rd.cachedImpactedTable
+	}
+
 	headers := []string{"Validated Using", "Source", "Category", "Impact", "Resource Type", "Recommendation", "Recommendation Id", "Subscription Id", "Subscription Name", "Resource Group", "Resource Name", "Resource Id", "Param1", "Param2", "Param3", "Param4", "Param5", "Learn"}
 
-	// Use a map to track unique entries by ResourceID + RecommendationID
-	seen := make(map[string]bool)
-	rows := [][]string{}
+	// Composite key type for deduplication - avoids string concatenation allocations
+	type impactedKey struct {
+		resourceID       string
+		recommendationID string
+	}
 
-	for _, r := range rd.Aprl {
-		// Create composite key for deduplication
-		key := r.ResourceID + "|" + r.RecommendationID
-		if seen[key] {
+	// Pre-allocate with estimated capacity (graph length + 1 for headers)
+	// This avoids multiple slice reallocations
+	rows := make([][]string, 1, len(rd.Graph)+1)
+	rows[0] = headers
+
+	// Use struct{} instead of bool to save memory
+	seen := make(map[impactedKey]struct{}, len(rd.Graph))
+
+	for _, r := range rd.Graph {
+		// Cache string conversions once to avoid repeated type conversions
+		category := string(r.Category)
+		if skipCategory(category) {
+			continue
+		}
+
+		// Create composite key - avoids string concatenation
+		key := impactedKey{
+			resourceID:       r.ResourceID,
+			recommendationID: r.RecommendationID,
+		}
+		if _, exists := seen[key]; exists {
 			continue // Skip duplicate
 		}
-		seen[key] = true
+		seen[key] = struct{}{}
+
+		impact := string(r.Impact)
 
 		row := []string{
 			"Azure Resource Graph",
 			r.Source,
-			string(r.Category),
-			string(r.Impact),
+			category,
+			impact,
 			r.ResourceType,
 			r.Recommendation,
 			r.RecommendationID,
@@ -94,53 +134,25 @@ func (rd *ReportData) ImpactedTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	for _, d := range rd.Azqr {
-		for _, r := range d.Recommendations {
-			if r.NotCompliant {
-				// Create composite key for deduplication
-				key := d.ResourceID() + "|" + r.RecommendationID
-				if seen[key] {
-					continue // Skip duplicate
-				}
-				seen[key] = true
-
-				row := []string{
-					"Azure Resource Manager",
-					"AZQR",
-					string(r.Category),
-					string(r.Impact),
-					d.Type,
-					r.Recommendation,
-					r.RecommendationID,
-					MaskSubscriptionID(d.SubscriptionID, rd.Mask),
-					d.SubscriptionName,
-					d.ResourceGroup,
-					d.ServiceName,
-					MaskSubscriptionIDInResourceID(d.ResourceID(), rd.Mask),
-					r.Result,
-					"",
-					"",
-					"",
-					"",
-					r.LearnMoreUrl,
-				}
-				rows = append(rows, row)
-			}
-		}
-	}
-
-	rows = append([][]string{headers}, rows...)
+	rd.cachedImpactedTable = rows
 	return rows
 }
 
 func (rd *ReportData) CostTable() [][]string {
+	if rd.cachedCostTable != nil {
+		return rd.cachedCostTable
+	}
+
 	headers := []string{"From", "To", "Subscription Id", "Subscription Name", "Service Name", "Value", "Currency"}
 
-	rows := [][]string{}
-	for _, r := range rd.Cost.Items {
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(rd.Cost)+1)
+	rows[0] = headers
+
+	for _, r := range rd.Cost {
 		row := []string{
-			rd.Cost.From.Format("2006-01-02"),
-			rd.Cost.To.Format("2006-01-02"),
+			r.From.Format("2006-01-02"),
+			r.To.Format("2006-01-02"),
 			MaskSubscriptionID(r.SubscriptionID, rd.Mask),
 			r.SubscriptionName,
 			r.ServiceName,
@@ -150,13 +162,21 @@ func (rd *ReportData) CostTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedCostTable = rows
 	return rows
 }
 
 func (rd *ReportData) DefenderTable() [][]string {
+	if rd.cachedDefenderTable != nil {
+		return rd.cachedDefenderTable
+	}
+
 	headers := []string{"Subscription Id", "Subscription Name", "Name", "Tier"}
-	rows := [][]string{}
+
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(rd.Defender)+1)
+	rows[0] = headers
+
 	for _, d := range rd.Defender {
 		row := []string{
 			MaskSubscriptionID(d.SubscriptionID, rd.Mask),
@@ -167,13 +187,21 @@ func (rd *ReportData) DefenderTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedDefenderTable = rows
 	return rows
 }
 
 func (rd *ReportData) AdvisorTable() [][]string {
+	if rd.cachedAdvisorTable != nil {
+		return rd.cachedAdvisorTable
+	}
+
 	headers := []string{"Subscription Id", "Subscription Name", "Resource Type", "Resource Name", "Category", "Impact", "Description", "Resource Id", "Recommendation Id"}
-	rows := [][]string{}
+
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(rd.Advisor)+1)
+	rows[0] = headers
+
 	for _, d := range rd.Advisor {
 		row := []string{
 			MaskSubscriptionID(d.SubscriptionID, rd.Mask),
@@ -189,14 +217,22 @@ func (rd *ReportData) AdvisorTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedAdvisorTable = rows
 	return rows
 }
 
 // AzurePolicyTable returns Azure Policy data formatted as a table with headers and rows for reporting.
 func (rd *ReportData) AzurePolicyTable() [][]string {
+	if rd.cachedAzurePolicyTable != nil {
+		return rd.cachedAzurePolicyTable
+	}
+
 	headers := []string{"Subscription Id", "Subscription Name", "Resource Group", "Resource Type", "Resource Name", "Policy Display Name", "Policy Description", "Resource Id", "Time Stamp", "Policy Definition Name", "Policy Definition Id", "Policy Assignment Name", "Policy Assignment Id", "Compliance State"}
-	rows := [][]string{}
+
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(rd.AzurePolicy)+1)
+	rows[0] = headers
+
 	for _, d := range rd.AzurePolicy {
 		row := []string{
 			MaskSubscriptionID(d.SubscriptionID, rd.Mask),
@@ -217,14 +253,22 @@ func (rd *ReportData) AzurePolicyTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedAzurePolicyTable = rows
 	return rows
 }
 
 // ArcSQLTable returns Arc-enabled SQL Server data formatted as a table with headers and rows for reporting.
 func (rd *ReportData) ArcSQLTable() [][]string {
+	if rd.cachedArcSQLTable != nil {
+		return rd.cachedArcSQLTable
+	}
+
 	headers := []string{"Subscription Id", "Subscription Name", "Azure Arc Server", "SQL Instance", "Resource Group", "Version", "Build", "Patch Level", "Edition", "VCores", "License", "DPS Status", "TEL Status", "Defender Status"}
-	rows := [][]string{}
+
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(rd.ArcSQL)+1)
+	rows[0] = headers
+
 	for _, d := range rd.ArcSQL {
 		row := []string{
 			MaskSubscriptionID(d.SubscriptionID, rd.Mask),
@@ -245,11 +289,15 @@ func (rd *ReportData) ArcSQLTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedArcSQLTable = rows
 	return rows
 }
 
 func (rd *ReportData) RecommendationsTable() [][]string {
+	if rd.cachedRecommendationsTable != nil {
+		return rd.cachedRecommendationsTable
+	}
+
 	counter := map[string]int{}
 	for _, rt := range rd.Recommendations {
 		for _, r := range rt {
@@ -257,35 +305,40 @@ func (rd *ReportData) RecommendationsTable() [][]string {
 		}
 	}
 
-	for _, r := range rd.Aprl {
+	for _, r := range rd.Graph {
 		counter[r.RecommendationID]++
-	}
-
-	for _, d := range rd.Azqr {
-		for _, r := range d.Recommendations {
-			if r.NotCompliant {
-				counter[r.RecommendationID]++
-			}
-		}
 	}
 
 	headers := []string{"Implemented", "Number of Impacted Resources", "Azure Service / Well-Architected", "Recommendation Source",
 		"Azure Service Category / Well-Architected Area", "Azure Service / Well-Architected Topic", "Category", "Recommendation",
 		"Impact", "Best Practices Guidance", "Read More", "Recommendation Id"}
-	rows := [][]string{}
+
+	// Estimate capacity based on recommendations count
+	estimatedCap := len(counter) + 1
+	rows := make([][]string, 1, estimatedCap)
+	rows[0] = headers
+
+	deployedTypes := make(map[string]bool, len(rd.ResourceTypeCount))
+	for _, resType := range rd.ResourceTypeCount {
+		deployedTypes[strings.ToLower(resType.ResourceType)] = true
+	}
+	// Always consider Microsoft.Resources as deployed
+	deployedTypes["microsoft.resources"] = true
+
 	for _, rt := range rd.Recommendations {
 		for _, r := range rt {
-			implemented := "N/A"
-			typeIsDeployed := false
-			for _, resType := range rd.ResourceTypeCount {
-				if strings.EqualFold(resType.ResourceType, r.ResourceType) {
-					typeIsDeployed = true
-					break
-				}
+			if skipCategory(r.Category) {
+				continue
 			}
-			if typeIsDeployed && counter[r.RecommendationID] == 0 {
+			typeIsDeployed := deployedTypes[strings.ToLower(r.ResourceType)]
+
+			var implemented string
+			switch {
+			case !typeIsDeployed:
+				implemented = "N/A"
+			case counter[r.RecommendationID] == 0:
 				implemented = "true"
-			} else if typeIsDeployed && counter[r.RecommendationID] > 0 {
+			default:
 				implemented = "false"
 			}
 
@@ -297,6 +350,10 @@ func (rd *ReportData) RecommendationsTable() [][]string {
 				servicePart = typeParts[1]
 			}
 
+			// Cache string conversions
+			category := string(r.Category)
+			impact := string(r.Impact)
+
 			row := []string{
 				implemented,
 				fmt.Sprint(counter[r.RecommendationID]),
@@ -304,9 +361,9 @@ func (rd *ReportData) RecommendationsTable() [][]string {
 				r.Source,
 				categoryPart,
 				servicePart,
-				string(r.Category),
+				category,
 				r.Recommendation,
-				string(r.Impact),
+				impact,
 				r.LongDescription,
 				r.LearnMoreLink[0].Url,
 				r.RecommendationID,
@@ -315,13 +372,21 @@ func (rd *ReportData) RecommendationsTable() [][]string {
 		}
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedRecommendationsTable = rows
 	return rows
 }
 
 func (rd *ReportData) ResourceTypesTable() [][]string {
+	if rd.cachedResourceTypesTable != nil {
+		return rd.cachedResourceTypesTable
+	}
+
 	headers := []string{"Subscription Name", "Resource Type", "Number of Resources"}
-	rows := [][]string{}
+
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(rd.ResourceTypeCount)+1)
+	rows[0] = headers
+
 	for _, r := range rd.ResourceTypeCount {
 		row := []string{
 			r.Subscription,
@@ -331,13 +396,21 @@ func (rd *ReportData) ResourceTypesTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedResourceTypesTable = rows
 	return rows
 }
 
 func (rd *ReportData) DefenderRecommendationsTable() [][]string {
+	if rd.cachedDefenderRecommendationsTable != nil {
+		return rd.cachedDefenderRecommendationsTable
+	}
+
 	headers := []string{"Subscription Id", "Subscription Name", "Resource Group", "Resource Type", "Resource Name", "Category", "Recommendation Severity", "Recommendation Name", "Action Description", "Remediation Description", "AzPortal Link", "Resource Id"}
-	rows := [][]string{}
+
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(rd.DefenderRecommendations)+1)
+	rows[0] = headers
+
 	for _, d := range rd.DefenderRecommendations {
 		row := []string{
 			MaskSubscriptionID(d.SubscriptionId, rd.Mask),
@@ -356,31 +429,40 @@ func (rd *ReportData) DefenderRecommendationsTable() [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
+	rd.cachedDefenderRecommendationsTable = rows
 	return rows
 }
 
-func NewReportData(outputFile string, mask bool, policyEnabled bool, arcEnabled bool, defenderEnabled bool, advisorEnabled bool, costEnabled bool) ReportData {
+// ClearTableCache clears all cached table data, forcing regeneration on next call.
+// Useful if underlying data changes after initial table generation.
+func (rd *ReportData) ClearTableCache() {
+	rd.cachedImpactedTable = nil
+	rd.cachedCostTable = nil
+	rd.cachedDefenderTable = nil
+	rd.cachedAdvisorTable = nil
+	rd.cachedAzurePolicyTable = nil
+	rd.cachedArcSQLTable = nil
+	rd.cachedRecommendationsTable = nil
+	rd.cachedResourceTypesTable = nil
+	rd.cachedDefenderRecommendationsTable = nil
+	rd.cachedResourcesTable = nil
+	rd.cachedExcludedResourcesTable = nil
+}
+
+func NewReportData(outputFile string, mask bool, stages *models.StageConfigs) ReportData {
 	return ReportData{
 		OutputFileName:          outputFile,
 		Mask:                    mask,
-		Recommendations:         map[string]map[string]models.AprlRecommendation{},
-		Azqr:                    []*models.AzqrServiceResult{},
-		Aprl:                    []*models.AprlResult{},
+		Recommendations:         map[string]map[string]*models.GraphRecommendation{},
+		Graph:                   []*models.GraphResult{},
 		Defender:                []*models.DefenderResult{},
 		DefenderRecommendations: []*models.DefenderRecommendation{},
 		Advisor:                 []*models.AdvisorResult{},
 		AzurePolicy:             []*models.AzurePolicyResult{},
 		ArcSQL:                  []*models.ArcSQLResult{},
-		Cost: &models.CostResult{
-			Items: []*models.CostResultItem{},
-		},
-		ResourceTypeCount: []models.ResourceTypeCount{},
-		PolicyEnabled:     policyEnabled,
-		ArcEnabled:        arcEnabled,
-		DefenderEnabled:   defenderEnabled,
-		AdvisorEnabled:    advisorEnabled,
-		CostEnabled:       costEnabled,
+		Cost:                    []*models.CostResult{},
+		ResourceTypeCount:       []*models.ResourceTypeCount{},
+		Stages:                  stages,
 	}
 }
 
@@ -415,23 +497,20 @@ func MaskSubscriptionIDInResourceID(resourceID string, mask bool) string {
 func (rd *ReportData) resourcesTable(resources []*models.Resource) [][]string {
 	headers := []string{"Subscription Id", "Resource Group", "Location", "Resource Type", "Resource Name", "Sku Name", "Sku Tier", "Kind", "SLA", "Resource Id"}
 
-	rows := [][]string{}
-	for _, r := range resources {
-		sla := ""
+	// Pre-allocate with capacity to avoid reallocations
+	rows := make([][]string, 1, len(resources)+1)
+	rows[0] = headers
 
-		for _, a := range rd.Azqr {
-			if strings.EqualFold(strings.ToLower(a.ResourceID()), strings.ToLower(r.ID)) {
-				for _, rc := range a.Recommendations {
-					if rc.RecommendationType == models.TypeSLA {
-						sla = rc.Result
-						break
-					}
-				}
-				if sla != "" {
-					break
-				}
-			}
+	slaMap := make(map[string]string, len(rd.Graph))
+	for _, a := range rd.Graph {
+		if a.Category == models.CategorySLA {
+			// Use lowercase for case-insensitive lookup
+			slaMap[strings.ToLower(a.ResourceID)] = a.Param1
 		}
+	}
+
+	for _, r := range resources {
+		sla := slaMap[strings.ToLower(r.ID)]
 
 		row := []string{
 			MaskSubscriptionID(r.SubscriptionID, rd.Mask),
@@ -448,6 +527,9 @@ func (rd *ReportData) resourcesTable(resources []*models.Resource) [][]string {
 		rows = append(rows, row)
 	}
 
-	rows = append([][]string{headers}, rows...)
 	return rows
+}
+
+func skipCategory(category string) bool {
+	return category == string(models.CategorySLA)
 }

@@ -54,7 +54,7 @@ type QueryResponse struct {
 // NewGraphQuery creates a new GraphQuery using the provided TokenCredential.
 func NewGraphQuery(cred azcore.TokenCredential) *GraphQueryClient {
 	// Create Azure HTTP client with built-in retry and throttling
-	httpClient := az.NewHttpClient(cred, 60*time.Second)
+	httpClient := az.NewHttpClient(cred, az.DefaultHttpClientOptions(60*time.Second))
 
 	resourceManagerEndpoint := az.GetResourceManagerEndpoint()
 
@@ -68,7 +68,7 @@ func NewGraphQuery(cred azcore.TokenCredential) *GraphQueryClient {
 // It handles batching and pagination.
 func (q *GraphQueryClient) Query(ctx context.Context, query string, subscriptions []*string) *GraphResult {
 	result := GraphResult{
-		Data: make([]interface{}, 0),
+		Data: make([]interface{}, 0, 5000),
 	}
 
 	// Convert []*string to []string for serialization
@@ -82,10 +82,7 @@ func (q *GraphQueryClient) Query(ctx context.Context, query string, subscription
 	// Run the query in batches of 300 subscriptions
 	batchSize := 300
 	for i := 0; i < len(subscriptionIDs); i += batchSize {
-		j := i + batchSize
-		if j > len(subscriptionIDs) {
-			j = len(subscriptionIDs)
-		}
+		j := min(i+batchSize, len(subscriptionIDs))
 
 		format := "objectArray"
 		options := &QueryRequestOptions{
@@ -131,12 +128,8 @@ func (q *GraphQueryClient) doRequest(ctx context.Context, request QueryRequest) 
 		Reader: bytes.NewReader(body),
 	}
 
-	// Get resource manager endpoint scope
-	resourceManagerEndpoint := az.GetResourceManagerEndpoint()
-	scope := to.Ptr(fmt.Sprintf("%s/.default", resourceManagerEndpoint))
-
 	// Send POST request using HttpClient (handles retries and throttling automatically)
-	respBody, resp, err := q.httpClient.DoPost(ctx, q.endpoint, readSeekCloser, scope)
+	respBody, resp, err := q.httpClient.DoPost(ctx, q.endpoint, readSeekCloser)
 	if err != nil {
 		return nil, err
 	}

@@ -6,16 +6,18 @@ package excel
 import (
 	_ "image/png"
 
+	"github.com/Azure/azqr/internal/models"
+
 	"github.com/Azure/azqr/internal/renderers"
 	"github.com/rs/zerolog/log"
 	"github.com/xuri/excelize/v2"
 )
 
 // renderArcSQL creates and populates the Arc SQL sheet in the Excel report.
-func renderArcSQL(f *excelize.File, data *renderers.ReportData) {
+func renderArcSQL(f *excelize.File, data *renderers.ReportData, styles *StyleCache) {
 	// Skip creating the sheet if the feature is disabled
-	if !data.ArcEnabled {
-		log.Info().Msg("Skipping Arc SQL. Feature is disabled")
+	if !data.Stages.IsStageEnabled(models.StageNameArc) {
+		log.Debug().Msg("Skipping Arc SQL. Feature is disabled")
 		return
 	}
 
@@ -26,26 +28,21 @@ func renderArcSQL(f *excelize.File, data *renderers.ReportData) {
 
 	records := data.ArcSQLTable()
 	headers := records[0]
-	createFirstRow(f, "Arc SQL", headers)
+	createFirstRow(f, "Arc SQL", headers, styles)
 
 	// Skip if no data to render
 	if len(data.ArcSQL) == 0 {
 		log.Info().Msg("Skipping Arc SQL. No data to render")
+		return
 	}
 
 	records = records[1:]
-	currentRow := 4
-	for _, row := range records {
-		currentRow += 1
-		cell, err := excelize.CoordinatesToCellName(1, currentRow)
-		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to get cell")
-		}
-		err = f.SetSheetRow("Arc SQL", cell, &row)
-		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to set row")
-		}
+
+	// Use optimized batch writing for better performance
+	currentRow, err := writeRowsOptimized(f, "Arc SQL", records, 4)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to write rows")
 	}
 
-	configureSheet(f, "Arc SQL", headers, currentRow)
+	configureSheet(f, "Arc SQL", headers, currentRow, styles)
 }

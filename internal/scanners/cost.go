@@ -18,8 +18,7 @@ type CostScanner struct {
 	client *armcostmanagement.QueryClient
 }
 
-// Init - Initializes the Cost Scanner
-func (s *CostScanner) Init(config *models.ScannerConfig) error {
+func (s *CostScanner) init(config *models.ScannerConfig) error {
 	s.config = config
 	var err error
 	s.client, err = armcostmanagement.NewQueryClient(config.Cred, config.ClientOptions)
@@ -30,12 +29,11 @@ func (s *CostScanner) Init(config *models.ScannerConfig) error {
 }
 
 // QueryCosts - Query Costs.
-func (s *CostScanner) QueryCosts() (*models.CostResult, error) {
+func (s *CostScanner) QueryCosts() ([]*models.CostResult, error) {
 	models.LogSubscriptionScan(s.config.SubscriptionID, "Costs")
 	timeframeType := armcostmanagement.TimeframeTypeCustom
 	etype := armcostmanagement.ExportTypeActualCost
-	toTime := time.Now().UTC()
-	fromTime := time.Date(toTime.Year(), toTime.Month()-3, 1, 0, 0, 0, 0, time.UTC)
+	fromTime, toTime := costTimeRange(time.Now().UTC())
 	sum := armcostmanagement.FunctionTypeSum
 	dimension := armcostmanagement.QueryColumnTypeDimension
 	qd := armcostmanagement.QueryDefinition{
@@ -67,14 +65,12 @@ func (s *CostScanner) QueryCosts() (*models.CostResult, error) {
 		return nil, err
 	}
 
-	result := models.CostResult{
-		From:  fromTime,
-		To:    toTime,
-		Items: []*models.CostResultItem{},
-	}
+	result := []*models.CostResult{}
 
 	for _, v := range resp.Properties.Rows {
-		result.Items = append(result.Items, &models.CostResultItem{
+		result = append(result, &models.CostResult{
+			From:             fromTime,
+			To:               toTime,
 			SubscriptionID:   s.config.SubscriptionID,
 			SubscriptionName: s.config.SubscriptionName,
 			ServiceName:      fmt.Sprintf("%v", v[1]),
@@ -82,25 +78,25 @@ func (s *CostScanner) QueryCosts() (*models.CostResult, error) {
 			Currency:         fmt.Sprintf("%v", v[2]),
 		})
 	}
-	return &result, nil
+	return result, nil
 }
 
-func (s *CostScanner) Scan(scan bool, config *models.ScannerConfig) *models.CostResult {
-	costResult := &models.CostResult{
-		Items: []*models.CostResultItem{},
+func (s *CostScanner) Scan(config *models.ScannerConfig) []*models.CostResult {
+	costResult := []*models.CostResult{}
+	err := s.init(config)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize Cost Scanner")
 	}
-	if scan {
-		err := s.Init(config)
-		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to initialize Cost Scanner")
-		}
-		costs, err := s.QueryCosts()
-		if err != nil && !models.ShouldSkipError(err) {
-			log.Fatal().Err(err).Msg("Failed to query costs")
-		}
-		costResult.From = costs.From
-		costResult.To = costs.To
-		costResult.Items = append(costResult.Items, costs.Items...)
+	costs, err := s.QueryCosts()
+	if err != nil && !models.ShouldSkipError(err) {
+		log.Fatal().Err(err).Msg("Failed to query costs")
 	}
+	costResult = append(costResult, costs...)
 	return costResult
+}
+
+func costTimeRange(now time.Time) (time.Time, time.Time) {
+	start := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).Add(-time.Nanosecond)
+	return start, end
 }

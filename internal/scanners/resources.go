@@ -11,9 +11,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type ResourceScanner struct{}
+type ResourceDiscovery struct{}
 
-func (sc ResourceScanner) GetAllResources(ctx context.Context, cred azcore.TokenCredential, subscriptions map[string]string, filters *models.Filters) ([]*models.Resource, []*models.Resource) {
+func (sc *ResourceDiscovery) GetAllResources(ctx context.Context, cred azcore.TokenCredential, subscriptions map[string]string, filters *models.Filters) ([]*models.Resource, []*models.Resource) {
 	models.LogResourceTypeScan("Resources")
 
 	graphClient := graph.NewGraphQuery(cred)
@@ -89,7 +89,7 @@ func (sc ResourceScanner) GetAllResources(ctx context.Context, cred azcore.Token
 	return resources, excludedResources
 }
 
-func (sc ResourceScanner) GetCountPerResourceTypeAndSubscription(ctx context.Context, cred azcore.TokenCredential, subscriptions map[string]string, recommendations map[string]map[string]models.AprlRecommendation, filters *models.Filters) []models.ResourceTypeCount {
+func (sc ResourceDiscovery) GetCountPerResourceTypeAndSubscription(ctx context.Context, cred azcore.TokenCredential, subscriptions map[string]string, recommendations map[string]map[string]*models.GraphRecommendation, filters *models.Filters) []*models.ResourceTypeCount {
 	models.LogResourceTypeScan("Resource Count per Subscription and Type")
 
 	graphClient := graph.NewGraphQuery(cred)
@@ -100,7 +100,7 @@ func (sc ResourceScanner) GetCountPerResourceTypeAndSubscription(ctx context.Con
 		subs = append(subs, to.Ptr(s))
 	}
 	result := graphClient.Query(ctx, query, subs)
-	resources := []models.ResourceTypeCount{}
+	resources := []*models.ResourceTypeCount{}
 	if result.Data != nil {
 		for _, row := range result.Data {
 			m := row.(map[string]interface{})
@@ -109,7 +109,7 @@ func (sc ResourceScanner) GetCountPerResourceTypeAndSubscription(ctx context.Con
 				continue
 			}
 
-			resources = append(resources, models.ResourceTypeCount{
+			resources = append(resources, &models.ResourceTypeCount{
 				Subscription: subscriptions[m["subscriptionId"].(string)],
 				ResourceType: m["type"].(string),
 				Count:        m["count_"].(float64),
@@ -119,7 +119,7 @@ func (sc ResourceScanner) GetCountPerResourceTypeAndSubscription(ctx context.Con
 	return resources
 }
 
-func (sc ResourceScanner) GetCountPerResourceType(ctx context.Context, cred azcore.TokenCredential, subscriptions map[string]string, filters *models.Filters) map[string]float64 {
+func (sc ResourceDiscovery) GetCountPerResourceType(ctx context.Context, cred azcore.TokenCredential, subscriptions map[string]string, filters *models.Filters) map[string]float64 {
 	models.LogResourceTypeScan("Resource Count per Type")
 
 	graphClient := graph.NewGraphQuery(cred)

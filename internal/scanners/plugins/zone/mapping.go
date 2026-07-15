@@ -54,10 +54,14 @@ func (s *ZoneMappingScanner) Scan(ctx context.Context, cred azcore.TokenCredenti
 		{"Subscription", "Location", "Display Name", "Logical Zone", "Physical Zone"},
 	}
 
+	// Create a single HTTP client to share across all goroutines.
+	// az.HttpClient is safe for concurrent use.
+	httpClient := az.NewHttpClient(cred, az.DefaultHttpClientOptions(30*time.Second))
+
 	// Use parallel processing for performance
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	results := make([]zoneMappingResult, 0)
+	results := make([]zoneMappingResult, 0, len(subscriptions)*10)
 
 	// Process subscriptions in parallel with worker pool
 	const maxWorkers = 5
@@ -68,13 +72,18 @@ func (s *ZoneMappingScanner) Scan(ctx context.Context, cred azcore.TokenCredenti
 		go func(subscriptionID, subscriptionName string) {
 			defer wg.Done()
 
+			// Check for context cancellation before acquiring the semaphore
+			if ctx.Err() != nil {
+				return
+			}
+
 			// Acquire semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
 			log.Debug().Msgf("Fetching zone mappings for subscription: %s", subscriptionName)
 
-			subResults, err := s.fetchZoneMappings(ctx, cred, subscriptionID, subscriptionName)
+			subResults, err := s.fetchZoneMappings(ctx, httpClient, subscriptionID, subscriptionName)
 			if err != nil {
 				log.Error().
 					Err(err).
@@ -145,17 +154,13 @@ type availabilityZoneMapping struct {
 }
 
 // fetchZoneMappings retrieves zone mappings for a single subscription using az.HttpClient
-func (s *ZoneMappingScanner) fetchZoneMappings(ctx context.Context, cred azcore.TokenCredential, subscriptionID, subscriptionName string) ([]zoneMappingResult, error) {
-	// Create HTTP client with authentication and retry capabilities
-	httpClient := az.NewHttpClient(cred, 30*time.Second)
-
+func (s *ZoneMappingScanner) fetchZoneMappings(ctx context.Context, httpClient *az.HttpClient, subscriptionID, subscriptionName string) ([]zoneMappingResult, error) {
 	// Construct the REST API URL
 	// GET /subscriptions/{subscriptionId}/locations?api-version=2022-12-01
 	endpoint := fmt.Sprintf("https://management.azure.com/subscriptions/%s/locations?api-version=2022-12-01", subscriptionID)
 
-	// Make the request with authentication (empty string uses default scope)
-	emptyScope := ""
-	body, err := httpClient.Do(ctx, endpoint, &emptyScope, 3)
+	// Make the request with authentication
+	body, err := httpClient.Do(ctx, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch locations: %w", err)
 	}
@@ -169,7 +174,7 @@ func (s *ZoneMappingScanner) fetchZoneMappings(ctx context.Context, cred azcore.
 	log.Debug().Msgf("Retrieved %d locations for subscription %s", len(locationsResp.Value), subscriptionName)
 
 	// Process the results
-	results := make([]zoneMappingResult, 0)
+	results := make([]zoneMappingResult, 0, len(locationsResp.Value)*3)
 	locationsWithZones := 0
 	for _, location := range locationsResp.Value {
 		// Debug: log each location

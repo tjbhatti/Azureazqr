@@ -1,9 +1,15 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package json
 
 import (
 	"encoding/json"
 	"fmt"
+
 	"os"
+
+	"github.com/Azure/azqr/internal/models"
 
 	"github.com/Azure/azqr/internal/renderers"
 	"github.com/iancoleman/strcase"
@@ -11,24 +17,61 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// CreateJsonReport generates a single consolidated JSON report
-func CreateJsonReport(data *renderers.ReportData) {
-	filename := fmt.Sprintf("%s.json", data.OutputFileName)
-	log.Info().Msgf("Generating Report: %s", filename)
+// buildConsolidatedReport builds the consolidated JSON structure from report data
+func buildConsolidatedReport(data *renderers.ReportData) map[string]interface{} {
+	consolidatedReport := map[string]interface{}{}
 
-	// Build consolidated JSON structure
-	consolidatedReport := map[string]interface{}{
-		"recommendations":         convertToJSON(data.RecommendationsTable()),
-		"impacted":                convertToJSON(data.ImpactedTable()),
-		"resourceType":            convertToJSON(data.ResourceTypesTable()),
-		"inventory":               convertToJSON(data.ResourcesTable()),
-		"advisor":                 convertToJSON(data.AdvisorTable()),
-		"azurePolicy":             convertToJSON(data.AzurePolicyTable()),
-		"arcSQL":                  convertToJSON(data.ArcSQLTable()),
-		"defender":                convertToJSON(data.DefenderTable()),
-		"defenderRecommendations": convertToJSON(data.DefenderRecommendationsTable()),
-		"costs":                   convertToJSON(data.CostTable()),
-		"outOfScope":              convertToJSON(data.ExcludedResourcesTable()),
+	// Only include AZQR-related data if the feature is enabled
+	if data.Stages.IsStageEnabled(models.StageNameGraph) {
+		consolidatedReport["recommendations"] = ConvertToJSON(data.RecommendationsTable())
+		consolidatedReport["impacted"] = ConvertToJSON(data.ImpactedTable())
+		consolidatedReport["resourceType"] = ConvertToJSON(data.ResourceTypesTable())
+		consolidatedReport["inventory"] = ConvertToJSON(data.ResourcesTable())
+		consolidatedReport["outOfScope"] = ConvertToJSON(data.ExcludedResourcesTable())
+	} else {
+		log.Debug().Msg("Skipping AZQR data in JSON. Feature is disabled")
+	}
+
+	// Only include Advisor data if the feature is enabled
+	if data.Stages.IsStageEnabled(models.StageNameAdvisor) {
+		consolidatedReport["advisor"] = ConvertToJSON(data.AdvisorTable())
+	} else {
+		log.Debug().Msg("Skipping Advisor data in JSON. Feature is disabled")
+	}
+
+	// Only include Azure Policy data if the feature is enabled
+	if data.Stages.IsStageEnabled(models.StageNamePolicy) {
+		consolidatedReport["azurePolicy"] = ConvertToJSON(data.AzurePolicyTable())
+	} else {
+		log.Debug().Msg("Skipping Azure Policy data in JSON. Feature is disabled")
+	}
+
+	// Only include Arc SQL data if the feature is enabled
+	if data.Stages.IsStageEnabled(models.StageNameArc) {
+		consolidatedReport["arcSQL"] = ConvertToJSON(data.ArcSQLTable())
+	} else {
+		log.Debug().Msg("Skipping Arc SQL data in JSON. Feature is disabled")
+	}
+
+	// Only include Defender data if the feature is enabled
+	if data.Stages.IsStageEnabled(models.StageNameDefender) {
+		consolidatedReport["defender"] = ConvertToJSON(data.DefenderTable())
+	} else {
+		log.Debug().Msg("Skipping Defender data in JSON. Feature is disabled")
+	}
+
+	// Only include Defender Recommendations data if the feature is enabled
+	if data.Stages.IsStageEnabled(models.StageNameDefenderRecommendations) {
+		consolidatedReport["defenderRecommendations"] = ConvertToJSON(data.DefenderRecommendationsTable())
+	} else {
+		log.Debug().Msg("Skipping Defender Recommendations data in JSON. Feature is disabled")
+	}
+
+	// Only include Cost data if the feature is enabled
+	if data.Stages.IsStageEnabled(models.StageNameCost) {
+		consolidatedReport["costs"] = ConvertToJSON(data.CostTable())
+	} else {
+		log.Debug().Msg("Skipping Cost data in JSON. Feature is disabled")
 	}
 
 	// Add external plugin results
@@ -38,22 +81,31 @@ func CreateJsonReport(data *renderers.ReportData) {
 			pluginData := map[string]interface{}{
 				"description": result.Description,
 				"sheetName":   result.SheetName,
-				"data":        convertToJSON(result.Table),
+				"data":        ConvertToJSON(result.Table),
 			}
 			plugins[result.PluginName] = pluginData
 		}
 		consolidatedReport["externalPlugins"] = plugins
 	}
 
-	// Write consolidated JSON to single file
+	return consolidatedReport
+}
+
+// CreateJsonReport generates a single consolidated JSON report file
+func CreateJsonReport(data *renderers.ReportData) {
+	filename := fmt.Sprintf("%s.json", data.OutputFileName)
+	log.Info().Msgf("Generating Report: %s", filename)
+
+	consolidatedReport := buildConsolidatedReport(data)
 	writeData(consolidatedReport, filename)
 }
 
+// CreateJsonOutput generates the same consolidated JSON structure as CreateJsonReport
+// but returns it as a string for console output instead of writing to a file
 func CreateJsonOutput(data *renderers.ReportData) string {
-	// Build consolidated JSON structure
-	impacted := convertToJSON(data.ImpactedTable())
+	consolidatedReport := buildConsolidatedReport(data)
 
-	js, err := json.MarshalIndent(impacted, "", "\t")
+	js, err := json.MarshalIndent(consolidatedReport, "", "\t")
 	if err != nil {
 		log.Fatal().Err(err).Msg("error marshaling data:")
 	}
@@ -63,30 +115,33 @@ func CreateJsonOutput(data *renderers.ReportData) string {
 
 // writeData writes the consolidated JSON data to a single file
 func writeData(data map[string]interface{}, filename string) {
-	f, err := os.Create(filename)
+	f, err := os.Create(filename) //nolint:gosec // filename is generated from user's output-name flag
 	if err != nil {
 		log.Fatal().Err(err).Msg("error creating json:")
+		return
 	}
 
 	defer func() {
 		// Handle error during file close
 		if cerr := f.Close(); cerr != nil {
-			log.Fatal().Err(cerr).Msg("error closing file:")
+			log.Error().Err(cerr).Msg("error closing file:")
 		}
 	}()
 
 	js, err := json.MarshalIndent(data, "", "\t")
 	if err != nil {
-		log.Fatal().Err(err).Msg("error marshaling data:")
+		log.Error().Err(err).Msg("error marshaling data:")
+		return
 	}
 
 	_, err = f.Write(js)
 	if err != nil {
-		log.Fatal().Err(err).Msg("error writing json:")
+		_ = f.Close()                                   // Close the file before exiting to ensure cleanup
+		log.Fatal().Err(err).Msg("error writing json:") //nolint:gocritic // File is explicitly closed above
 	}
 }
 
-func convertToJSON(data [][]string) []map[string]string {
+func ConvertToJSON(data [][]string) []map[string]string {
 	var result []map[string]string
 	headers := data[0]
 

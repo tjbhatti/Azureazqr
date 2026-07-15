@@ -14,8 +14,9 @@ import (
 )
 
 // LoadYamlPlugin loads a YAML plugin from a file and converts queries to AprlRecommendation format
-func LoadYamlPlugin(filePath string) (*Plugin, []models.AprlRecommendation, error) {
-	data, err := os.ReadFile(filePath)
+func LoadYamlPlugin(filePath string) (*Plugin, []models.GraphRecommendation, error) {
+	cleanPath := filepath.Clean(filePath)
+	data, err := os.ReadFile(cleanPath) //nolint:gosec // filePath comes from plugin discovery in trusted directories
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read YAML plugin file: %w", err)
 	}
@@ -36,12 +37,11 @@ func LoadYamlPlugin(filePath string) (*Plugin, []models.AprlRecommendation, erro
 		return nil, nil, fmt.Errorf("plugin must have at least one query")
 	}
 
-	// Load external query files if specified
-	baseDir := filepath.Dir(filePath)
+	baseDir := filepath.Dir(cleanPath)
 	for i := range config.Queries {
 		if config.Queries[i].QueryFile != "" {
-			queryPath := filepath.Join(baseDir, config.Queries[i].QueryFile)
-			queryData, err := os.ReadFile(queryPath)
+			queryPath := filepath.Clean(filepath.Join(baseDir, config.Queries[i].QueryFile))
+			queryData, err := os.ReadFile(queryPath) //nolint:gosec // queryFile is relative to plugin directory
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to read query file %s: %w", config.Queries[i].QueryFile, err)
 			}
@@ -63,14 +63,14 @@ func LoadYamlPlugin(filePath string) (*Plugin, []models.AprlRecommendation, erro
 	}
 
 	// Convert YamlPluginQuery to AprlRecommendation format
-	recommendations := make([]models.AprlRecommendation, 0, len(config.Queries))
+	recommendations := make([]models.GraphRecommendation, 0, len(config.Queries))
 	for _, query := range config.Queries {
 		automationAvailable := "false"
 		if query.AutomationAvailable {
 			automationAvailable = "true"
 		}
 
-		recommendation := models.AprlRecommendation{
+		recommendation := models.GraphRecommendation{
 			RecommendationID:    query.AprlGuid,
 			ResourceType:        query.RecommendationResourceType,
 			Recommendation:      query.Description,
@@ -107,7 +107,7 @@ func LoadYamlPlugin(filePath string) (*Plugin, []models.AprlRecommendation, erro
 
 // discoverYamlPlugins searches for YAML plugins in configured directories
 func discoverYamlPlugins(dirs []string) ([]*Plugin, error) {
-	plugins := make([]*Plugin, 0)
+	plugins := make([]*Plugin, 0, 16)
 	seen := make(map[string]bool)
 
 	for _, dir := range dirs {

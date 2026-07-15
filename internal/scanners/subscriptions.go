@@ -2,6 +2,7 @@ package scanners
 
 import (
 	"context"
+	"slices"
 
 	"github.com/Azure/azqr/internal/models"
 	"github.com/Azure/azqr/internal/to"
@@ -11,9 +12,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type SubcriptionScanner struct{}
+type SubcriptionDiscovery struct{}
 
-func (sc SubcriptionScanner) ListSubscriptions(ctx context.Context, cred azcore.TokenCredential, subscriptions []string, filters *models.Filters, options *arm.ClientOptions) map[string]string {
+func (sc *SubcriptionDiscovery) ListSubscriptions(ctx context.Context, cred azcore.TokenCredential, subscriptions []string, filters *models.Filters, options *arm.ClientOptions) map[string]string {
 	client, err := armsubscription.NewSubscriptionsClient(cred, options)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create subscriptions client")
@@ -21,7 +22,7 @@ func (sc SubcriptionScanner) ListSubscriptions(ctx context.Context, cred azcore.
 
 	resultPager := client.NewListPager(nil)
 
-	subs := make([]*armsubscription.Subscription, 0)
+	subs := make([]*armsubscription.Subscription, 0, 10)
 	for resultPager.More() {
 		pageResp, err := resultPager.NextPage(ctx)
 		if err != nil {
@@ -39,9 +40,9 @@ func (sc SubcriptionScanner) ListSubscriptions(ctx context.Context, cred azcore.
 	result := map[string]string{}
 	for _, s := range subs {
 		sid := *s.SubscriptionID
-		// If subscriptionns is empty run the filter on all subscriptions.
-		// If Subscriptions is not empty exlude all subscriptions except the ones specified.
-		if len(subscriptions) == 0 || containsString(subscriptions, sid) {
+		// If subscriptions is empty run the filter on all subscriptions.
+		// If Subscriptions is not empty exclude all subscriptions except the ones specified.
+		if len(subscriptions) == 0 || slices.Contains(subscriptions, sid) {
 			if filters.Azqr.IsSubscriptionExcluded(sid) {
 				log.Info().Msgf("Skipping subscriptions/...%s", sid[29:])
 				continue
@@ -51,14 +52,4 @@ func (sc SubcriptionScanner) ListSubscriptions(ctx context.Context, cred azcore.
 	}
 
 	return result
-}
-
-// Chek if string is in slice
-func containsString(slice []string, str string) bool {
-	for _, item := range slice {
-		if item == str {
-			return true
-		}
-	}
-	return false
 }
